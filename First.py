@@ -1,7 +1,8 @@
-# First.py → FINAL 100% WORKING & ERROR-FREE VERSION
+# First.py → SINGLE PROCESS CATEGORY + BOLD COLORS + DUPLICATES REMOVED
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import time
 
 st.set_page_config(page_title="Process Readiness Tracker", layout="wide")
 
@@ -14,135 +15,144 @@ def load_data():
         df = pd.read_csv(CSV_URL)
         df = df.dropna(how='all').reset_index(drop=True)
         df = df.fillna("—")
+        
+        # REMOVE DUPLICATE COLUMNS (keep first "Process Category")
+        df = df.loc[:, ~df.columns.duplicated()]
+        
         return df
     except Exception as e:
         st.error(f"Data load error: {e}")
         return pd.DataFrame()
 
-df = load_data()
+placeholder = st.empty()
+while True:
+    df = load_data()
 
-if df.empty:
-    st.warning("No data loaded. Check internet or CSV link.")
-    st.stop()
+    with placeholder.container():
+        if df.empty:
+            st.warning("No data loaded.")
+            time.sleep(REFRESH)
+            st.rerun()
 
-# TITLE
-st.markdown(f"""
-<div style="text-align:center; padding:30px; background:#1d4ed8; color:white; border-radius:15px; margin-bottom:30px;">
-    <h1 style="margin:0;">Process Readiness Tracker</h1>
-    <p style="margin:5px; font-size:1.3rem;">
-        Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} • Auto-refresh {REFRESH}s
-    </p>
-</div>
-""", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="text-align:center; padding:30px; background:#1d4ed8; color:white; border-radius:15px; margin-bottom:30px;">
+            <h1 style="margin:0;">Process Readiness Tracker</h1>
+            <p style="margin:5px; font-size:1.3rem;">
+                Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} • Auto-refresh {REFRESH}s
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
 
-# === FIND COLUMNS SAFELY ===
-cols_lower = df.columns.str.lower()
+        # Column detection (focus on key ones)
+        category_col = "Process Category"  # After drop duplicates, this is the single one
+        if category_col not in df.columns:
+            # Fallback if name varies
+            category_col = next((c for c in df.columns if "process category" in c.lower()), df.columns[0])
 
-process_col = next((c for c in df.columns if any(x in c.lower() for x in ['process', '线体'])), None)
-category_col = next((c for c in df.columns if any(x in c.lower() for x in ['category', '类别', '4m'])), None)
-sub_col = next((c for c in df.columns if any(x in c.lower() for x in ['sub', 'activity', 'milestone', '子活动', '任务'])), None)
-owner_col = next((c for c in df.columns if any(x in c.lower() for x in ['owner', '负责人', 'person', 'name'])), None)
-target_col = next((c for c in df.columns if any(x in c.lower() for x in ['target', 'due', '计划', '日期', 'date'])), None)
-status_col = next((c for c in df.columns if any(x in c.lower() for x in ['status', '状态'])), None)
-remark_col = next((c for c in df.columns if any(x in c.lower() for x in ['remark', '备注', 'comment', '说明'])), None)
+        sub_col = next((c for c in df.columns if "sub" in c.lower()), None)
+        owner_col = next((c for c in df.columns if "owner" in c.lower()), None)
+        target_col = next((c for c in df.columns if "target" in c.lower()), None)
+        status_col = next((c for c in df.columns if "status" in c.lower()), None)
+        remark_col = next((c for c in df.columns if "remark" in c.lower()), None)
 
-# Convert target date
-if target_col and target_col in df.columns:
-    df[target_col] = pd.to_datetime(df[target_col], errors='coerce', dayfirst=True, format='mixed')
-today = pd.Timestamp.today().normalize()
+        # Date parsing
+        if target_col:
+            df[target_col] = pd.to_datetime(df[target_col], errors='coerce', dayfirst=True)
+        today = pd.Timestamp.today().normalize()
 
-# Final Status
-def get_status(row):
-    closed = status_col and str(row[status_col]).lower().strip() in ["closed", "close", "done", "yes", "ok", "完成"]
-    overdue = target_col and pd.notna(row[target_col]) and row[target_col] < today
-    if closed and not overdue: return "Closed On Time"
-    if closed and overdue:     return "Closed (Late)"
-    if overdue:                return "NOT CLOSED – DELAYED!"
-    return "Open"
+        # Final Status
+        def get_status(row):
+            closed = status_col and str(row[status_col]).lower().strip() in ["closed", "close", "done"]
+            overdue = target_col and pd.notna(row[target_col]) and row[target_col] < today
+            if closed and not overdue: return "Closed On Time"
+            if closed and overdue: return "Closed (Late)"
+            if overdue: return "NOT CLOSED – DELAYED!"
+            return "Open"
+        df["Final Status"] = df.apply(get_status, axis=1)
 
-df["Final Status"] = df.apply(get_status, axis=1)
+        # Filters
+        col1, col2, col3 = st.columns(3)
+        filtered = df.copy()
 
-# === FILTERS WITH UNIQUE KEYS (THIS FIXES THE ERROR) ===
-col1, col2, col3 = st.columns(3)
-filtered = df.copy()
+        with col1:
+            if owner_col:
+                owners = ["All"] + sorted(filtered[owner_col].dropna().unique().tolist())
+                chosen_owner = st.selectbox("Owner", owners, key="owner_filter")
+                if chosen_owner != "All":
+                    filtered = filtered[filtered[owner_col] == chosen_owner]
 
-with col1:
-    if owner_col:
-        owners = ["All"] + sorted(df[owner_col].dropna().unique().tolist())
-        chosen_owner = st.selectbox("Owner", owners, key="owner_filter")
-        if chosen_owner != "All":
-            filtered = filtered[filtered[owner_col] == chosen_owner]
-    else:
-        st.write("Owner column not found")
+        with col2:
+            if category_col:
+                cats = ["All"] + sorted(filtered[category_col].dropna().unique().tolist())
+                chosen_cat = st.selectbox("Process Category", cats, key="cat_filter")
+                if chosen_cat != "All":
+                    filtered = filtered[filtered[category_col] == chosen_cat]
 
-with col2:
-    if process_col:
-        procs = ["All"] + sorted(df[process_col].dropna().unique().tolist())
-        chosen_proc = st.selectbox("Process", procs, key="process_filter")
-        if chosen_proc != "All":
-            filtered = filtered[filtered[process_col] == chosen_proc]
-    else:
-        st.write("Process column not found")
+        with col3:
+            view = st.selectbox("Show", ["All Items", "Only Delayed", "Only Open", "Only Closed"], key="view_filter")
+            if view == "Only Delayed":
+                filtered = filtered[filtered["Final Status"].str.contains("DELAYED")]
+            elif view == "Only Open":
+                filtered = filtered[filtered["Final Status"] == "Open"]
+            elif view == "Only Closed":
+                filtered = filtered[~filtered["Final Status"].str.contains("Open|DELAYED")]
 
-with col3:
-    view = st.selectbox(
-        "Show", 
-        ["All Items", "Only Delayed", "Only Open", "Only Closed"],
-        key="view_filter"
-    )
-    if view == "Only Delayed":
-        filtered = filtered[filtered["Final Status"].str.contains("DELAYED")]
-    elif view == "Only Open":
-        filtered = filtered[filtered["Final Status"] == "Open"]
-    elif view == "Only Closed":
-        filtered = filtered[~filtered["Final Status"].str.contains("Open|DELAYED")]
+        # Alert
+        delayed = len(filtered[filtered["Final Status"].str.contains("DELAYED")])
+        if delayed:
+            st.error(f"URGENT: {delayed} items DELAYED & NOT CLOSED!")
+        else:
+            st.success("All items are On Track or Closed")
 
-# === URGENT ALERT ===
-delayed = len(filtered[filtered["Final Status"].str.contains("DELAYED")])
-if delayed:
-    st.error(f"URGENT: {delayed} items DELAYED & NOT CLOSED!")
-else:
-    st.success("All items are On Track or Closed")
+        # Table columns
+        cols_to_show = [category_col, sub_col, owner_col, target_col, status_col, remark_col, "Final Status"]
+        valid_cols = [c for c in cols_to_show if c and c in filtered.columns]
+        table_df = filtered[valid_cols].reset_index(drop=True)
 
-# === BUILD TABLE ===
-cols_to_show = [c for c in [process_col, category_col, sub_col, owner_col, target_col, status_col, remark_col] if c]
-cols_to_show += ["Final Status"]
-valid_cols = [c for c in cols_to_show if c in filtered.columns]
-table_df = filtered[valid_cols].copy()
+        # HTML Table with bold colors + hide category repeats
+        html = [
+            '<style>',
+            'table{width:100%;border-collapse:collapse;font-family:Arial}',
+            'th,td{padding:12px;border:1px solid #333;color:black !important;font-size:15px;text-align:left}',
+            'th{background:#1e40af;color:white !important}',
+            '</style><table>'
+        ]
+        html.append('<tr>' + ''.join(f'<th>{c}</th>' for c in table_df.columns) + '</tr>')
 
-# === BULLETPROOF HTML TABLE (Dark mode safe, no formatting errors) ===
-html = [
-    '<style>',
-    'table{width:100%;border-collapse:collapse;background:white;font-family:Arial}',
-    'th,td{padding:12px;border:1px solid #555;color:black !important;font-size:15px}',
-    'th{background:#1e40af;color:white !important}',
-    '</style>',
-    '<table>',
-    '<tr>' + ''.join(f'<th>{col}</th>' for col in table_df.columns) + '</tr>'
-]
+        prev_cat = None
+        for _, row in table_df.iterrows():
+            status = row["Final Status"]
+            if "DELAYED" in status:
+                bg = "#ef4444"  # Bold red
+                text_color = "white;font-weight:bold"
+            elif "On Time" in status:
+                bg = "#22c55e"  # Bold green
+                text_color = "white"
+            elif status == "Open":
+                bg = "#fbbf24"  # Bold yellow
+                text_color = "black"
+            else:
+                bg = "#e5e7eb"  # Light gray
+                text_color = "black"
 
-for _, row in table_df.iterrows():
-    status = row["Final Status"]
-    if "DELAYED" in status:
-        bg = "#fca5a5"; bold = "font-weight:bold;color:#7f1d1d"
-    elif "On Time" in status:
-        bg = "#86efac"; bold = ""
-    elif status == "Open":
-        bg = "#fef08a"; bold = ""
-    else:
-        bg = "#f3f4f6"; bold = ""
+            cells = []
+            for col in table_df.columns:
+                val = str(row[col])
+                display_val = val
+                if col == category_col:
+                    if val == prev_cat:
+                        display_val = ""  # Hide repeat
+                    else:
+                        prev_cat = val
 
-    cells = ''.join(f'<td style="background:{bg};{bold}">{val}</td>' for val in row)
-    html.append(f'<tr>{cells}</tr>')
+                cells.append(f'<td style="background:{bg};color:{text_color}">{display_val}</td>')
+            html.append('<tr>' + ''.join(cells) + '</tr>')
 
-html.append('</table>')
-st.markdown(''.join(html), unsafe_allow_html=True)
+        html.append('</table>')
+        st.markdown(''.join(html), unsafe_allow_html=True)
 
-# === DOWNLOAD ===
-st.sidebar.success("FINAL – NO MORE ERRORS")
-st.sidebar.download_button(
-    label="Download Current View",
-    data=table_df.to_csv(index=False).encode(),
-    file_name="Readiness_Tracker.csv",
-    mime="text/csv"
-)
+        st.sidebar.success("SINGLE COLUMN + BOLD COLORS")
+        st.sidebar.download_button("Download View", table_df.to_csv(index=False).encode(), "Readiness.csv", "text/csv")
+
+    time.sleep(REFRESH)
+    st.rerun()
